@@ -25,11 +25,11 @@ app.post("/webhook", async (req, res) => {
   let command = null;
 
   if (ticker.includes("EURUSD") && action === "buy") {
-    command = `${LICENSE_ID},buy,EURUSD,vol_lots=26.5,sl_pips=7,tp_pips=14,betrigger=7,beoffset=0`;
+    command = `${LICENSE_ID},buy,EURUSD,vol_lots=26.5,sl_pips=7,tp_pips=10,betrigger=7,beoffset=0`;
   }
 
   if (ticker.includes("EURUSD") && action === "sell") {
-    command = `${LICENSE_ID},sell,EURUSD,vol_lots=26.5,sl_pips=7,tp_pips=14,betrigger=7,beoffset=0`;
+    command = `${LICENSE_ID},sell,EURUSD,vol_lots=26.5,sl_pips=7,tp_pips=10,betrigger=7,beoffset=0`;
   }
 
   if (!command) {
