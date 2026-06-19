@@ -24,12 +24,18 @@ app.post("/webhook", async (req, res) => {
 
   let command = null;
 
-  if (ticker.includes("EURUSD") && action === "buy") {
-    command = `${LICENSE_ID},buy,EURUSD,vol_lots=26.5,sl_pips=7,tp_pips=10,betrigger=7,beoffset=0`;
+  if (
+    action === "buy" &&
+    (ticker.includes("NASDAQ") || ticker.includes("US100") || ticker.includes("NAS100"))
+  ) {
+    command = `${LICENSE_ID},buy,US100.cash,vol_lots=34,8,sl_pips=53,tp_pips=70,betrigger=53,beoffset=0`;
   }
 
-  if (ticker.includes("EURUSD") && action === "sell") {
-    command = `${LICENSE_ID},sell,EURUSD,vol_lots=26.5,sl_pips=7,tp_pips=10,betrigger=7,beoffset=0`;
+  if (
+    action === "sell" &&
+    (ticker.includes("NASDAQ") || ticker.includes("US100") || ticker.includes("NAS100"))
+  ) {
+    command = `${LICENSE_ID},sell,US100.cash,vol_lots=34.8,sl_pips=53,tp_pips=70,betrigger=53,beoffset=0`;
   }
 
   if (!command) {
@@ -41,7 +47,9 @@ app.post("/webhook", async (req, res) => {
 
   await fetch(PINECONNECTOR_URL, {
     method: "POST",
-    headers: { "Content-Type": "text/plain" },
+    headers: {
+      "Content-Type": "text/plain"
+    },
     body: command
   });
 
