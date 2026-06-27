@@ -26,9 +26,13 @@ function extractNumber(msg, label) {
   return match ? Number(match[1]) : null;
 }
 
-app.post("/trend", (req, res) => {
+app.post("/webhook", async (req, res) => {
   const msg = String(req.body || "");
-  console.log("SMA200 recibido:", msg);
+  console.log("Mensaje recibido:", msg);
+
+  let action = null;
+  let price = null;
+  let sl = null;
 
   try {
     const data = JSON.parse(msg);
@@ -38,41 +42,19 @@ app.post("/trend", (req, res) => {
 
       console.log(
         aboveSMA200
-          ? "Modo actualizado: SOLO BUY"
-          : "Modo actualizado: SOLO SELL"
+          ? "SMA200 actualizada: PRECIO ENCIMA / SOLO BUY"
+          : "SMA200 actualizada: PRECIO DEBAJO / SOLO SELL"
       );
 
-      return res.status(200).send("Trend updated");
+      return res.status(200).send("SMA200 updated");
     }
-  } catch (err) {
-    console.log("Error leyendo SMA200:", err.message);
-  }
-
-  return res.status(200).send("Trend ignored");
-});
-
-app.post("/webhook", async (req, res) => {
-  const msg = String(req.body || "");
-  console.log("LP Pro recibido:", msg);
-
-  let action = null;
-  let price = null;
-  let sl = null;
-
-  try {
-    const data = JSON.parse(msg);
 
     action = String(data.action || "").toLowerCase();
     price = Number(data.price);
     sl = Number(data.sl);
   } catch {
-    if (msg.includes("SWEEP BUY") && msg.includes("NASDAQ")) {
-      action = "buy";
-    }
-
-    if (msg.includes("SWEEP SELL") && msg.includes("NASDAQ")) {
-      action = "sell";
-    }
+    if (msg.includes("SWEEP BUY") && msg.includes("NASDAQ")) action = "buy";
+    if (msg.includes("SWEEP SELL") && msg.includes("NASDAQ")) action = "sell";
 
     price = extractNumber(msg, "Price");
     sl = extractNumber(msg, "SL");
@@ -116,8 +98,7 @@ app.post("/webhook", async (req, res) => {
   const tpPips = slPips;
   const beTrigger = slPips;
 
-  const command =
-    `${LICENSE_ID},${action},US100.cash,vol_lots=${lot},sl_pips=${slPips},tp_pips=${tpPips},betrigger=${beTrigger},beoffset=0`;
+  const command = `${LICENSE_ID},${action},US100.cash,vol_lots=${lot},sl_pips=${slPips},tp_pips=${tpPips},betrigger=${beTrigger},beoffset=0`;
 
   console.log("========== OPERACIÓN ==========");
   console.log("Acción:", action);
@@ -132,9 +113,7 @@ app.post("/webhook", async (req, res) => {
 
   await fetch(PINECONNECTOR_URL, {
     method: "POST",
-    headers: {
-      "Content-Type": "text/plain"
-    },
+    headers: { "Content-Type": "text/plain" },
     body: command
   });
 
