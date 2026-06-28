@@ -6,18 +6,26 @@ app.use(express.text({ type: "*/*" }));
 const PINECONNECTOR_URL = "https://webhook.pineconnector.com";
 const LICENSE_ID = "9123046588629";
 
+// ==========================
+// CONFIGURACIÓN
+// ==========================
+
 const ACCOUNT_BALANCE = 10000;
-const RISK_PERCENT = 1;
-const RISK_EUR = ACCOUNT_BALANCE * (RISK_PERCENT / 100);
+const RISK_EUR = 25;
 
 const VALUE_PER_POINT_PER_LOT = 0.875;
 const MIN_LOT = 0.01;
 const MAX_LOT = 50;
 
+// ==========================
+
 let aboveSMA200 = null;
 
 function roundLot(lot) {
-  return Math.max(MIN_LOT, Math.min(MAX_LOT, Number(lot.toFixed(2))));
+  return Math.max(
+    MIN_LOT,
+    Math.min(MAX_LOT, Number(lot.toFixed(2)))
+  );
 }
 
 function extractNumber(msg, label) {
@@ -27,6 +35,7 @@ function extractNumber(msg, label) {
 }
 
 app.post("/webhook", async (req, res) => {
+
   const msg = String(req.body || "");
   console.log("Mensaje recibido:", msg);
 
@@ -35,89 +44,117 @@ app.post("/webhook", async (req, res) => {
   let sl = null;
 
   try {
+
     const data = JSON.parse(msg);
 
+    // ======================
+    // MENSAJE SMA200
+    // ======================
+
     if (typeof data.aboveSMA200 === "boolean") {
+
       aboveSMA200 = data.aboveSMA200;
 
       console.log(
         aboveSMA200
-          ? "SMA200 actualizada: PRECIO ENCIMA / SOLO BUY"
-          : "SMA200 actualizada: PRECIO DEBAJO / SOLO SELL"
+          ? "SMA200 -> SOLO BUY"
+          : "SMA200 -> SOLO SELL"
       );
 
-      return res.status(200).send("SMA200 updated");
+      return res.status(200).send("SMA Updated");
     }
+
+    // ======================
+    // MENSAJE LP PRO
+    // ======================
 
     action = String(data.action || "").toLowerCase();
     price = Number(data.price);
     sl = Number(data.sl);
+
   } catch {
-    if (msg.includes("SWEEP BUY") && msg.includes("NASDAQ")) action = "buy";
-    if (msg.includes("SWEEP SELL") && msg.includes("NASDAQ")) action = "sell";
+
+    if (msg.includes("SWEEP BUY") && msg.includes("NASDAQ"))
+      action = "buy";
+
+    if (msg.includes("SWEEP SELL") && msg.includes("NASDAQ"))
+      action = "sell";
 
     price = extractNumber(msg, "Price");
     sl = extractNumber(msg, "SL");
+
   }
 
   if (!["buy", "sell"].includes(action)) {
-    console.log("Ignorado: no es BUY/SELL");
+    console.log("No es BUY/SELL");
     return res.status(200).send("Ignored");
   }
 
   if (aboveSMA200 === null) {
-    console.log("Ignorado: todavía no hay dato de SMA200");
+    console.log("Esperando información SMA200...");
     return res.status(200).send("Ignored");
   }
 
-  if (action === "buy" && aboveSMA200 !== true) {
-    console.log("BUY ignorado: precio debajo de SMA200");
+  if (action === "buy" && !aboveSMA200) {
+    console.log("BUY rechazado por SMA200");
     return res.status(200).send("Ignored");
   }
 
-  if (action === "sell" && aboveSMA200 !== false) {
-    console.log("SELL ignorado: precio encima de SMA200");
+  if (action === "sell" && aboveSMA200) {
+    console.log("SELL rechazado por SMA200");
     return res.status(200).send("Ignored");
   }
 
   if (!price || !sl) {
-    console.log("Ignorado: faltan price o SL");
+    console.log("Faltan datos");
     return res.status(200).send("Ignored");
   }
 
   const slDistance = Math.abs(price - sl);
 
   if (slDistance <= 0) {
-    console.log("Ignorado: SL inválido");
+    console.log("SL inválido");
     return res.status(200).send("Ignored");
   }
 
-  const lot = roundLot(RISK_EUR / (slDistance * VALUE_PER_POINT_PER_LOT));
+  const lot = roundLot(
+    RISK_EUR /
+    (slDistance * VALUE_PER_POINT_PER_LOT)
+  );
 
   const slPips = Math.round(slDistance * 10);
-  const tpPips = slPips;
+
+  // TP = 2R
+  const tpPips = slPips * 2;
+
+  // Break Even al llegar a 1R
   const beTrigger = slPips;
 
-  const command = `${LICENSE_ID},${action},US100.cash,vol_lots=${lot},sl_pips=${slPips},tp_pips=${tpPips},betrigger=${beTrigger},beoffset=0`;
+  const command =
+`${LICENSE_ID},${action},US100.cash,vol_lots=${lot},sl_pips=${slPips},tp_pips=${tpPips},betrigger=${beTrigger},beoffset=0`;
 
-  console.log("========== OPERACIÓN ==========");
-  console.log("Acción:", action);
+  console.log("================================");
+  console.log("Operación:", action.toUpperCase());
   console.log("Precio:", price);
   console.log("SL:", sl);
-  console.log("Distancia SL:", slDistance);
-  console.log("Riesgo €:", RISK_EUR);
   console.log("Lotaje:", lot);
-  console.log("SMA200:", aboveSMA200 ? "ENCIMA / SOLO BUY" : "DEBAJO / SOLO SELL");
-  console.log("Enviando a PineConnector:", command);
-  console.log("===============================");
+  console.log("Riesgo:", RISK_EUR + "€");
+  console.log("SL Pips:", slPips);
+  console.log("TP Pips:", tpPips);
+  console.log("Break Even:", beTrigger);
+  console.log(command);
+  console.log("================================");
 
   await fetch(PINECONNECTOR_URL, {
     method: "POST",
-    headers: { "Content-Type": "text/plain" },
+    headers: {
+      "Content-Type": "text/plain"
+    },
     body: command
   });
 
   res.status(200).send("Sent");
+
 });
 
 app.listen(process.env.PORT || 10000, () => {
