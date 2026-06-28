@@ -6,8 +6,8 @@ app.use(express.text({ type: "*/*" }));
 const PINECONNECTOR_URL = "https://webhook.pineconnector.com";
 const LICENSE_ID = "9123046588629";
 
-const ACCOUNT_BALANCE = 160000;
-const RISK_PERCENT = 0.5;
+const ACCOUNT_BALANCE = 10000;
+const RISK_PERCENT = 1;
 const RISK_EUR = ACCOUNT_BALANCE * (RISK_PERCENT / 100);
 
 const VALUE_PER_POINT_PER_LOT = 0.875;
