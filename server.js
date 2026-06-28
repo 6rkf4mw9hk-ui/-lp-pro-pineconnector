@@ -11,7 +11,7 @@ const LICENSE_ID = "9123046588629";
 // ==========================
 
 const ACCOUNT_BALANCE = 10000;
-const RISK_EUR = 25;
+const RISK_EUR = 100;
 
 const VALUE_PER_POINT_PER_LOT = 0.875;
 const MIN_LOT = 0.01;
