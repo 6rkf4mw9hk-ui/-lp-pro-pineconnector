@@ -11,7 +11,7 @@ const LICENSE_ID = "9123046588629";
 // ==========================
 
 const ACCOUNT_BALANCE = 10000;
-const RISK_EUR = 100;
+const RISK_EUR = 25;
 
 const VALUE_PER_POINT_PER_LOT = 0.875;
 const MIN_LOT = 0.01;
@@ -35,7 +35,6 @@ function extractNumber(msg, label) {
 }
 
 app.post("/webhook", async (req, res) => {
-
   const msg = String(req.body || "");
   console.log("Mensaje recibido:", msg);
 
@@ -44,7 +43,6 @@ app.post("/webhook", async (req, res) => {
   let sl = null;
 
   try {
-
     const data = JSON.parse(msg);
 
     // ======================
@@ -52,7 +50,6 @@ app.post("/webhook", async (req, res) => {
     // ======================
 
     if (typeof data.aboveSMA200 === "boolean") {
-
       aboveSMA200 = data.aboveSMA200;
 
       console.log(
@@ -65,7 +62,7 @@ app.post("/webhook", async (req, res) => {
     }
 
     // ======================
-    // MENSAJE LP PRO
+    // MENSAJE LP PRO JSON
     // ======================
 
     action = String(data.action || "").toLowerCase();
@@ -73,25 +70,38 @@ app.post("/webhook", async (req, res) => {
     sl = Number(data.sl);
 
   } catch {
+    // ======================
+    // MENSAJE LP PRO TEXTO
+    // ======================
 
-    if (msg.includes("SWEEP BUY") && msg.includes("NASDAQ"))
+    if (msg.includes("SWEEP BUY") && msg.includes("NASDAQ")) {
       action = "buy";
+    }
 
-    if (msg.includes("SWEEP SELL") && msg.includes("NASDAQ"))
+    if (msg.includes("SWEEP SELL") && msg.includes("NASDAQ")) {
       action = "sell";
+    }
 
     price = extractNumber(msg, "Price");
     sl = extractNumber(msg, "SL");
-
   }
 
+  console.log(
+    "Estado SMA200:",
+    aboveSMA200 === null
+      ? "SIN DATOS"
+      : aboveSMA200
+        ? "SOLO BUY"
+        : "SOLO SELL"
+  );
+
   if (!["buy", "sell"].includes(action)) {
-    console.log("No es BUY/SELL");
+    console.log("Ignorado: no es BUY/SELL");
     return res.status(200).send("Ignored");
   }
 
   if (aboveSMA200 === null) {
-    console.log("Esperando información SMA200...");
+    console.log("Ignorado: esperando información SMA200");
     return res.status(200).send("Ignored");
   }
 
@@ -106,20 +116,19 @@ app.post("/webhook", async (req, res) => {
   }
 
   if (!price || !sl) {
-    console.log("Faltan datos");
+    console.log("Ignorado: faltan price o SL");
     return res.status(200).send("Ignored");
   }
 
   const slDistance = Math.abs(price - sl);
 
   if (slDistance <= 0) {
-    console.log("SL inválido");
+    console.log("Ignorado: SL inválido");
     return res.status(200).send("Ignored");
   }
 
   const lot = roundLot(
-    RISK_EUR /
-    (slDistance * VALUE_PER_POINT_PER_LOT)
+    RISK_EUR / (slDistance * VALUE_PER_POINT_PER_LOT)
   );
 
   const slPips = Math.round(slDistance * 10);
@@ -127,23 +136,25 @@ app.post("/webhook", async (req, res) => {
   // TP = 2R
   const tpPips = slPips * 2;
 
-  // Break Even al llegar a 1R
+  // BE al llegar a 1R
   const beTrigger = slPips;
 
   const command =
-`${LICENSE_ID},${action},US100.cash,vol_lots=${lot},sl_pips=${slPips},tp_pips=${tpPips},betrigger=${beTrigger},beoffset=0`;
+    `${LICENSE_ID},${action},US100.cash,vol_lots=${lot},sl_pips=${slPips},tp_pips=${tpPips},betrigger=${beTrigger},beoffset=0`;
 
-  console.log("================================");
-  console.log("Operación:", action.toUpperCase());
+  console.log("========== OPERACIÓN ==========");
+  console.log("Acción:", action.toUpperCase());
   console.log("Precio:", price);
   console.log("SL:", sl);
+  console.log("Distancia SL:", slDistance);
+  console.log("Riesgo €:", RISK_EUR);
   console.log("Lotaje:", lot);
-  console.log("Riesgo:", RISK_EUR + "€");
   console.log("SL Pips:", slPips);
   console.log("TP Pips:", tpPips);
   console.log("Break Even:", beTrigger);
-  console.log(command);
-  console.log("================================");
+  console.log("SMA200:", aboveSMA200 ? "SOLO BUY" : "SOLO SELL");
+  console.log("Enviando a PineConnector:", command);
+  console.log("===============================");
 
   await fetch(PINECONNECTOR_URL, {
     method: "POST",
@@ -154,7 +165,6 @@ app.post("/webhook", async (req, res) => {
   });
 
   res.status(200).send("Sent");
-
 });
 
 app.listen(process.env.PORT || 10000, () => {
