@@ -6,53 +6,11 @@ app.use(express.text({ type: "*/*" }));
 const PINECONNECTOR_URL = "https://webhook.pineconnector.com";
 const LICENSE_ID = "9123046588629";
 
-const RISK_EUR = 25;
+const RISK_EUR = 15;
+
+const VALUE_PER_POINT_PER_LOT = 0.875;
 const MIN_LOT = 0.01;
 const MAX_LOT = 50;
-
-// Tiempo máximo que esperará la señal actual de SMA200.
-const SMA_WAIT_MS = 15000;
-
-// Una SMA recibida hasta 20 segundos antes de LP Pro
-// se considera perteneciente al mismo cierre de vela.
-const SMA_SYNC_WINDOW_MS = 20000;
-
-const SMA_CHECK_INTERVAL_MS = 200;
-
-const MARKETS = {
-  NASDAQ: {
-    mt5Symbol: "US100.cash",
-    valuePerPointPerLot: 0.875,
-    pipsPerPoint: 10
-  },
-
-  GER40: {
-    mt5Symbol: "GER40.cash",
-    valuePerPointPerLot: 1,
-    pipsPerPoint: 10
-  }
-};
-
-// Estado SMA independiente para cada mercado.
-const smaStates = {
-  NASDAQ: {
-    above: null,
-    updatedAt: 0,
-    price: null,
-    sma200: null
-  },
-
-  GER40: {
-    above: null,
-    updatedAt: 0,
-    price: null,
-    sma200: null
-  }
-};
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
 
 function roundLotDown(lot) {
   const roundedDown = Math.floor(lot * 100) / 100;
@@ -70,65 +28,25 @@ function extractNumber(message, label) {
   return match ? Number(match[1]) : null;
 }
 
-function identifyMarket(...values) {
+function isNasdaq(...values) {
   const text = values
     .filter(Boolean)
     .join(" ")
     .toUpperCase()
     .replace(/\s+/g, "");
 
-  if (
+  return (
     text.includes("NASDAQ") ||
     text.includes("US100") ||
     text.includes("NAS100") ||
     text.includes("USTEC") ||
     text.includes("USTECH100")
-  ) {
-    return "NASDAQ";
-  }
-
-  if (
-    text.includes("GER40") ||
-    text.includes("DE40") ||
-    text.includes("DAX")
-  ) {
-    return "GER40";
-  }
-
-  return null;
-}
-
-function hasSynchronizedSma(market, signalReceivedAt) {
-  const state = smaStates[market];
-
-  if (!state || typeof state.above !== "boolean") {
-    return false;
-  }
-
-  const minimumValidTime =
-    signalReceivedAt - SMA_SYNC_WINDOW_MS;
-
-  return state.updatedAt >= minimumValidTime;
-}
-
-async function waitForSynchronizedSma(market, signalReceivedAt) {
-  const deadline = Date.now() + SMA_WAIT_MS;
-
-  while (Date.now() < deadline) {
-    if (hasSynchronizedSma(market, signalReceivedAt)) {
-      return true;
-    }
-
-    await sleep(SMA_CHECK_INTERVAL_MS);
-  }
-
-  return hasSynchronizedSma(market, signalReceivedAt);
+  );
 }
 
 app.post("/webhook", async (req, res) => {
   const rawMessage = String(req.body || "").trim();
 
-  console.log("");
   console.log("Mensaje recibido:", rawMessage);
 
   let data = null;
@@ -139,65 +57,28 @@ app.post("/webhook", async (req, res) => {
     data = null;
   }
 
-  // ==================================================
-  // MENSAJE DEL INDICADOR SMA200
-  // ==================================================
-
-  if (data && typeof data.aboveSMA200 === "boolean") {
-    const market = identifyMarket(
-      data.ticker,
-      data.tickerId,
-      data.symbol
-    );
-
-    if (!market || !MARKETS[market]) {
-      console.log("SMA200 ignorada: mercado no reconocido");
-      return res.status(200).send("Ignored");
-    }
-
-    smaStates[market] = {
-      above: data.aboveSMA200,
-      updatedAt: Date.now(),
-      price: Number(data.price),
-      sma200: Number(data.sma200)
-    };
-
-    console.log(
-      `SMA200 ${market}:`,
-      data.aboveSMA200 ? "SOLO BUY" : "SOLO SELL"
-    );
-
-    console.log("Precio SMA:", data.price);
-    console.log("Valor SMA200:", data.sma200);
-
-    return res.status(200).send("SMA Updated");
-  }
-
-  // ==================================================
-  // MENSAJE DE LP PRO
-  // ==================================================
-
-  const signalReceivedAt = Date.now();
-
-  let market = null;
   let action = null;
   let price = null;
   let sl = null;
+  let timeframe = null;
   let poolStrength = null;
 
   if (data) {
-    market = identifyMarket(
-      data.ticker,
-      data.tickerId,
-      data.symbol
-    );
+    if (!isNasdaq(data.ticker, data.tickerId, data.symbol)) {
+      console.log("Ignorado: no es NASDAQ");
+      return res.status(200).send("Ignored");
+    }
 
     action = String(data.action || "").toLowerCase();
     price = Number(data.price);
     sl = Number(data.sl);
+    timeframe = String(data.tf || data.timeframe || "");
     poolStrength = Number(data.pool_strength);
   } else {
-    market = identifyMarket(rawMessage);
+    if (!isNasdaq(rawMessage)) {
+      console.log("Ignorado: no es NASDAQ");
+      return res.status(200).send("Ignored");
+    }
 
     const upperMessage = rawMessage.toUpperCase();
 
@@ -211,11 +92,9 @@ app.post("/webhook", async (req, res) => {
 
     price = extractNumber(rawMessage, "Price");
     sl = extractNumber(rawMessage, "SL");
-  }
 
-  if (!market || !MARKETS[market]) {
-    console.log("Ignorado: mercado no reconocido");
-    return res.status(200).send("Ignored");
+    const timeframeMatch = rawMessage.match(/TF:\s*([0-9]+)/i);
+    timeframe = timeframeMatch ? timeframeMatch[1] : "";
   }
 
   if (!["buy", "sell"].includes(action)) {
@@ -223,60 +102,10 @@ app.post("/webhook", async (req, res) => {
     return res.status(200).send("Ignored");
   }
 
-  // ==================================================
-  // ESPERAR LA SMA DEL MISMO CIERRE DE VELA
-  // ==================================================
-
-  console.log(
-    `Esperando SMA200 sincronizada de ${market} antes de procesar ${action.toUpperCase()}...`
-  );
-
-  const smaAvailable = await waitForSynchronizedSma(
-    market,
-    signalReceivedAt
-  );
-
-  if (!smaAvailable) {
-    console.log(
-      `Ignorado: no llegó una SMA200 actual de ${market} en 15 segundos`
-    );
-
+  if (timeframe && timeframe !== "1") {
+    console.log(`Ignorado: timeframe ${timeframe}, solo se acepta 1m`);
     return res.status(200).send("Ignored");
   }
-
-  const smaState = smaStates[market];
-
-  const smaAgeMs = Date.now() - smaState.updatedAt;
-
-  console.log(
-    `SMA200 sincronizada ${market}:`,
-    smaState.above ? "SOLO BUY" : "SOLO SELL"
-  );
-
-  console.log(
-    "Antigüedad del dato SMA:",
-    `${smaAgeMs} ms`
-  );
-
-  if (action === "buy" && smaState.above !== true) {
-    console.log(
-      `BUY de ${market} rechazado: precio debajo de SMA200`
-    );
-
-    return res.status(200).send("Ignored");
-  }
-
-  if (action === "sell" && smaState.above !== false) {
-    console.log(
-      `SELL de ${market} rechazado: precio encima de SMA200`
-    );
-
-    return res.status(200).send("Ignored");
-  }
-
-  // ==================================================
-  // VALIDAR DATOS DE LA OPERACIÓN
-  // ==================================================
 
   if (
     !Number.isFinite(price) ||
@@ -290,23 +119,14 @@ app.post("/webhook", async (req, res) => {
 
   const slDistance = Math.abs(price - sl);
 
-  if (
-    !Number.isFinite(slDistance) ||
-    slDistance <= 0
-  ) {
+  if (!Number.isFinite(slDistance) || slDistance <= 0) {
     console.log("Ignorado: distancia al SL inválida");
     return res.status(200).send("Ignored");
   }
 
-  const marketConfig = MARKETS[market];
-
-  // ==================================================
-  // LOTAJE PARA UN SL MÁXIMO APROXIMADO DE 25 €
-  // ==================================================
-
   const rawLot =
     RISK_EUR /
-    (slDistance * marketConfig.valuePerPointPerLot);
+    (slDistance * VALUE_PER_POINT_PER_LOT);
 
   const lot = roundLotDown(rawLot);
 
@@ -318,24 +138,18 @@ app.post("/webhook", async (req, res) => {
   const estimatedRisk =
     lot *
     slDistance *
-    marketConfig.valuePerPointPerLot;
-
-  // ==================================================
-  // RR 1:2 Y BREAK EVEN EN 1R
-  // ==================================================
+    VALUE_PER_POINT_PER_LOT;
 
   const slPips = Math.max(
     1,
-    Math.round(
-      slDistance * marketConfig.pipsPerPoint
-    )
+    Math.round(slDistance * 10)
   );
 
   const tpPips = slPips * 2;
   const beTrigger = slPips;
 
   const command =
-    `${LICENSE_ID},${action},${marketConfig.mt5Symbol}` +
+    `${LICENSE_ID},${action},US100.cash` +
     `,vol_lots=${lot}` +
     `,sl_pips=${slPips}` +
     `,tp_pips=${tpPips}` +
@@ -343,16 +157,15 @@ app.post("/webhook", async (req, res) => {
     `,beoffset=0`;
 
   console.log("========== OPERACIÓN ==========");
-  console.log("Mercado:", market);
-  console.log("Símbolo MT5:", marketConfig.mt5Symbol);
+  console.log("Mercado: NASDAQ");
+  console.log("Símbolo MT5: US100.cash");
+  console.log("Timeframe:", timeframe || "no indicado");
   console.log("Acción:", action.toUpperCase());
   console.log("Precio:", price);
   console.log("SL:", sl);
   console.log("Distancia SL:", slDistance);
-  console.log(
-    "Riesgo estimado €:",
-    estimatedRisk.toFixed(2)
-  );
+  console.log("Riesgo configurado €:", RISK_EUR);
+  console.log("Riesgo estimado €:", estimatedRisk.toFixed(2));
   console.log("Lotaje:", lot);
   console.log("SL Pips:", slPips);
   console.log("TP Pips:", tpPips);
@@ -362,29 +175,17 @@ app.post("/webhook", async (req, res) => {
     console.log("Pool Strength:", poolStrength);
   }
 
-  console.log(
-    "SMA200 confirmada:",
-    smaState.above ? "SOLO BUY" : "SOLO SELL"
-  );
-
-  console.log(
-    "Enviando a PineConnector:",
-    command
-  );
-
+  console.log("Enviando a PineConnector:", command);
   console.log("===============================");
 
   try {
-    const response = await fetch(
-      PINECONNECTOR_URL,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "text/plain"
-        },
-        body: command
-      }
-    );
+    const response = await fetch(PINECONNECTOR_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "text/plain"
+      },
+      body: command
+    });
 
     const responseText = await response.text();
 
@@ -395,13 +196,8 @@ app.post("/webhook", async (req, res) => {
     );
 
     if (!response.ok) {
-      console.log(
-        "PineConnector rechazó la orden"
-      );
-
-      return res
-        .status(502)
-        .send("PineConnector error");
+      console.log("PineConnector rechazó la orden");
+      return res.status(502).send("PineConnector error");
     }
 
     return res.status(200).send("Sent");
